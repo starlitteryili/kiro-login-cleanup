@@ -1,0 +1,13 @@
+# 永远不要把实际运行产物 / 个人机器码提交到仓库
+*.log
+last-run.log
+
+# 脚本运行时若把备份目录意外创建在仓库内
+kiro-cleanup-backup-*/
+new-machine-ids.txt
+
+# 编辑器 / OS 杂项
+.DS_Store
+.idea/
+.vscode/
+*.swp
