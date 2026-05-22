@@ -83,15 +83,17 @@ sudo dnf install -y sqlite jq python3
 ## 安装
 
 ```bash
-# 方式 1：直接 clone
-gh repo clone starlitteryili/kiro-login-cleanup ~/kiro-login-cleanup
+# 方式 1：clone 整个仓库
+git clone https://github.com/starlitteryili/kiro-login-cleanup.git ~/kiro-login-cleanup
 chmod +x ~/kiro-login-cleanup/clean-kiro-login.sh
 
-# 方式 2：单文件
+# 方式 2：只下单脚本
 curl -fsSL https://raw.githubusercontent.com/starlitteryili/kiro-login-cleanup/main/clean-kiro-login.sh \
   -o ~/clean-kiro-login.sh && chmod +x ~/clean-kiro-login.sh
+
+# 方式 3：用 gh
+gh repo clone starlitteryili/kiro-login-cleanup ~/kiro-login-cleanup
 ```
-> 私有仓库：`curl` 方式需要先 `gh auth token` 拿到 token 加 `-H "Authorization: token <TOKEN>"`，建议用 `gh repo clone`。
 
 ---
 
