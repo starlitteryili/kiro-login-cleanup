@@ -1,11 +1,24 @@
 # kiro-login-cleanup
 
+[![lint](https://github.com/starlitteryili/kiro-login-cleanup/actions/workflows/lint.yml/badge.svg)](https://github.com/starlitteryili/kiro-login-cleanup/actions/workflows/lint.yml)
+[![license](https://img.shields.io/github/license/starlitteryili/kiro-login-cleanup)](LICENSE)
+[![release](https://img.shields.io/github/v/release/starlitteryili/kiro-login-cleanup)](https://github.com/starlitteryili/kiro-login-cleanup/releases)
+[![platform](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20WSL%20%7C%20windows-informational)](#支持的系统)
+[![English](https://img.shields.io/badge/README-English-blue)](README.en.md)
+
 > 一键彻底清理本机所有 **Kiro IDE 登录痕迹** + **轮换设备机器码**，
 > 同时**完整保留聊天记录、用户设置、项目级 `.kiro/` 配置**。
 > 适合换 Pro 账号 / 排障 / 防止账号关联封禁场景。
 
-支持平台：**Linux**（已在 Ubuntu 24.04 + Kiro 0.12.x 验证）。
-macOS / Windows 路径需要按文末"路径对照表"修改后再用。
+## 支持的系统
+
+| OS | 脚本 | 状态 |
+|---|---|---|
+| **Linux**（Ubuntu / Debian / Fedora …） | `clean-kiro-login.sh` | ✅ 已实测（Ubuntu 24.04 + Kiro 0.12.x） |
+| **macOS** | `clean-kiro-login.sh` | ✅ 路径自动检测，CI 通过 `bash -n` |
+| **WSL2 (Windows 下的 Linux 子系统)** | `clean-kiro-login.sh` | ✅ 自动识别 |
+| **Git Bash / MSYS / Cygwin (Windows)** | `clean-kiro-login.sh` | ✅ 自动识别 `%APPDATA%` |
+| **原生 Windows PowerShell** | `clean-kiro-login.ps1` | ✅ 与 Bash 版功能完全一致 |
 
 ---
 
@@ -61,26 +74,42 @@ macOS / Windows 路径需要按文末"路径对照表"修改后再用。
 
 ## 依赖
 
+### Linux / macOS / WSL / Git Bash
+
 | 工具 | 用途 |
 |---|---|
-| `bash` ≥ 4 | 主脚本 |
+| `bash` ≥ 3.2（macOS 自带 3.2 也能跑） | 主脚本 |
 | `sqlite3` | 改 `state.vscdb` / Chrome `Cookies` |
 | `jq` | 改 `storage.json` |
 | `python3` | 生成随机 UUID / hex |
 
-Ubuntu / Debian:
 ```bash
-sudo apt install -y sqlite3 jq python3
+sudo apt install -y sqlite3 jq python3        # Ubuntu/Debian/WSL
+sudo dnf install -y sqlite jq python3         # Fedora/RHEL
+brew install sqlite jq python3                # macOS
+pacman -S sqlite jq python                    # MSYS2
 ```
 
-Fedora / RHEL:
-```bash
-sudo dnf install -y sqlite jq python3
+### Windows（PowerShell 原生）
+
+| 工具 | 用途 |
+|---|---|
+| PowerShell ≥ 5.1（Win 10/11 自带） | 主脚本 |
+| `sqlite3.exe` 在 PATH 上 | SQLite 操作 |
+
+随便一个安装方式：
+```powershell
+winget install SQLite.SQLite       # Windows 10/11 推荐
+scoop install sqlite               # 装了 scoop 的话
+choco install sqlite               # 装了 chocolatey 的话
 ```
+> Windows 上 `[guid]::NewGuid()` 和 `RandomNumberGenerator` 直接生成机器码，**无需** `python` / `jq`。
 
 ---
 
 ## 安装
+
+### Linux / macOS / WSL / Git Bash
 
 ```bash
 # 方式 1：clone 整个仓库
@@ -95,11 +124,32 @@ curl -fsSL https://raw.githubusercontent.com/starlitteryili/kiro-login-cleanup/m
 gh repo clone starlitteryili/kiro-login-cleanup ~/kiro-login-cleanup
 ```
 
+### Windows（PowerShell）
+
+```powershell
+# 方式 1：clone 整个仓库
+git clone https://github.com/starlitteryili/kiro-login-cleanup.git $env:USERPROFILE\kiro-login-cleanup
+cd $env:USERPROFILE\kiro-login-cleanup
+
+# 方式 2：只下 PS1
+iwr https://raw.githubusercontent.com/starlitteryili/kiro-login-cleanup/main/clean-kiro-login.ps1 `
+    -OutFile $env:USERPROFILE\clean-kiro-login.ps1
+```
+
+如果首次运行报 *"无法加载文件，因为在此系统上禁止运行脚本"*：
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+# 或单次执行：
+powershell -ExecutionPolicy Bypass -File .\clean-kiro-login.ps1 -DryRun
+```
+
 ---
 
 ## 快速使用
 
 **关键前置**：先**完全退出 Kiro**，并**关闭所有 Chrome 窗口**（如果你想顺便清浏览器 cookie）。
+
+### Linux / macOS / WSL / Git Bash
 
 ```bash
 # 1) 干跑预览（什么都不会改，强烈建议第一次用先跑这个）
@@ -118,19 +168,36 @@ gh repo clone starlitteryili/kiro-login-cleanup ~/kiro-login-cleanup
 ./clean-kiro-login.sh --yes --no-rotate
 ```
 
-每次实际运行都会在 `~/kiro-cleanup-backup-<时间戳>/` 留**完整备份**（聊天记录 + state.vscdb + storage.json + Chrome Cookies + 新机器码列表）。
+### Windows PowerShell
+
+```powershell
+# 1) 干跑预览
+.\clean-kiro-login.ps1 -DryRun
+
+# 2) 一把过
+.\clean-kiro-login.ps1 -Yes
+
+# 3) 跳过浏览器
+.\clean-kiro-login.ps1 -Yes -SkipBrowser
+
+# 4) 只清登录、不轮换机器码
+.\clean-kiro-login.ps1 -Yes -NoRotate
+```
+
+每次实际运行都会在 `~/kiro-cleanup-backup-<时间戳>/`（Windows 是 `%USERPROFILE%\kiro-cleanup-backup-<TS>\`）
+留**完整备份**（聊天记录 + state.vscdb + storage.json + Chrome Cookies + 新机器码列表）。
 
 ---
 
 ## 命令行选项
 
-| 选项 | 含义 |
-|---|---|
-| `-y`, `--yes` | 跳过所有确认提示，自动 yes |
-| `-n`, `--dry-run` | 只打印将要做什么，不实际改任何文件 |
-| `--skip-browser` | 跳过系统 Chrome 的 cookie 清理（Chrome 不关时用） |
-| `--no-rotate` | 不主动写入新机器码，仅删除——下次启动 Kiro 时由它自己生成 |
-| `-h`, `--help` | 显示帮助 |
+| Bash | PowerShell | 含义 |
+|---|---|---|
+| `-y`, `--yes` | `-Yes` | 跳过所有确认提示，自动 yes |
+| `-n`, `--dry-run` | `-DryRun` | 只打印将要做什么，不实际改任何文件 |
+| `--skip-browser` | `-SkipBrowser` | 跳过系统 Chrome 的 cookie 清理（Chrome 不关时用） |
+| `--no-rotate` | `-NoRotate` | 不主动写入新机器码，仅删除——下次启动 Kiro 时由它自己生成 |
+| `-h`, `--help` | `Get-Help .\clean-kiro-login.ps1` | 显示帮助 |
 
 退出码：`0` 成功 / `1` 前置检查失败（Kiro 在跑、缺依赖等）/ `2` 用户取消。
 
@@ -268,19 +335,19 @@ sqlite3 ~/.local/share/kiro-cli/data.sqlite3 \
 
 ---
 
-## 路径对照表（其他平台参考）
+## 路径对照表（脚本内部映射，自动检测 OS）
 
-| 项 | Linux | macOS | Windows |
+| 项 | Linux / WSL | macOS | Windows |
 |---|---|---|---|
 | Kiro 用户目录 | `~/.config/Kiro` | `~/Library/Application Support/Kiro` | `%APPDATA%\Kiro` |
-| machineid | `~/.config/Kiro/machineid` | 上目录 + `/machineId` | 上目录 + `\machineId` |
+| machineid 文件名 | `machineid`（小写） | `machineId`（大写 I） | `machineId` |
 | storage.json | `<UserDir>/User/globalStorage/storage.json` | 同 | 同 |
 | state.vscdb | `<UserDir>/User/globalStorage/state.vscdb` | 同 | 同 |
 | AWS SSO cache | `~/.aws/sso/cache/` | 同 | `%USERPROFILE%\.aws\sso\cache\` |
-| Chrome Cookies | `~/.config/google-chrome/Default/Cookies` | `~/Library/Application Support/Google/Chrome/Default/Cookies` | `%LOCALAPPDATA%\Google\Chrome\User Data\Default\Network\Cookies` |
+| Chrome Cookies | `~/.config/google-chrome/Default/Cookies` | `~/Library/Application Support/Google/Chrome/Default/Cookies` | `%LOCALAPPDATA%\Google\Chrome\User Data\Default\Network\Cookies` ⚠️ 注意 `Network\` 子目录 |
 
-> macOS 下脚本里所有 `~/.config/Kiro` 替换为 `~/Library/Application Support/Kiro` 即可。
-> Windows 推荐改写为 PowerShell 等价版本。
+> 脚本里 `detect_os()` 函数自动选择上面对应一行的路径，无需手动修改。
+> 进程检测、`pgrep`/`Get-Process`、`sqlite3` 调用方式也都会切换到对应平台的实现。
 
 ---
 

@@ -4,11 +4,14 @@
 # 彻底清理 Kiro 登录痕迹（token / cookie / 设备指纹 / AWS SSO 缓存 /
 # 浏览器 Kiro+AWS cookie），保留聊天记录和项目设置。
 #
+# 支持平台: Linux / macOS / WSL / Git Bash on Windows
+#
 # 用法:
 #   ./clean-kiro-login.sh            # 交互式（每步确认）
 #   ./clean-kiro-login.sh --yes      # 全部自动确认
 #   ./clean-kiro-login.sh --dry-run  # 只打印将做什么，不实际删除
 #   ./clean-kiro-login.sh --skip-browser  # 跳过 Chrome cookie 清理
+#   ./clean-kiro-login.sh --no-rotate     # 不写入新机器码，仅删除
 #
 # 退出码:
 #   0 成功 / 1 前置检查失败 / 2 用户取消
@@ -26,7 +29,7 @@ for arg in "$@"; do
     --skip-browser)  SKIP_BROWSER=1 ;;
     --no-rotate)     ROTATE_IDS=0 ;;
     -h|--help)
-      sed -n '2,18p' "$0"; exit 0 ;;
+      sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "未知参数: $arg" >&2; exit 1 ;;
   esac
 done
@@ -57,18 +60,80 @@ run() {
   fi
 }
 
-KIRO_DIR="$HOME/.config/Kiro"
+# ----- 平台检测 + 路径解析 -----
+detect_os() {
+  local u; u="$(uname -s 2>/dev/null || echo unknown)"
+  case "$u" in
+    Linux*)
+      if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then echo wsl; else echo linux; fi ;;
+    Darwin*)              echo macos ;;
+    MINGW*|MSYS*|CYGWIN*) echo windows-bash ;;
+    *)                    echo unknown ;;
+  esac
+}
+OS_KIND="$(detect_os)"
+
+case "$OS_KIND" in
+  linux|wsl)
+    KIRO_DIR="$HOME/.config/Kiro"
+    MACHINEID_FILE="machineid"
+    AWS_SSO_CACHE="$HOME/.aws/sso/cache"
+    CHROME_DIR="$HOME/.config/google-chrome"
+    CHROME_COOKIES_REL="Cookies"
+    KIRO_PROC_REGEX='([Kk]iro|/opt/Kiro)'
+    CHROME_PROC_REGEX='/opt/google/chrome/chrome|/usr/bin/google-chrome|chromium|/snap/chromium'
+    ;;
+  macos)
+    KIRO_DIR="$HOME/Library/Application Support/Kiro"
+    MACHINEID_FILE="machineId"
+    AWS_SSO_CACHE="$HOME/.aws/sso/cache"
+    CHROME_DIR="$HOME/Library/Application Support/Google/Chrome"
+    CHROME_COOKIES_REL="Cookies"
+    KIRO_PROC_REGEX='[Kk]iro\.app|[Kk]iro Helper'
+    CHROME_PROC_REGEX='Google Chrome|/Applications/Google Chrome'
+    ;;
+  windows-bash)
+    # Git Bash / MSYS：把 Windows 环境变量翻译成 POSIX 路径
+    : "${APPDATA:=$HOME/AppData/Roaming}"
+    : "${LOCALAPPDATA:=$HOME/AppData/Local}"
+    : "${USERPROFILE:=$HOME}"
+    KIRO_DIR="$APPDATA/Kiro"
+    MACHINEID_FILE="machineId"
+    AWS_SSO_CACHE="$USERPROFILE/.aws/sso/cache"
+    CHROME_DIR="$LOCALAPPDATA/Google/Chrome/User Data"
+    CHROME_COOKIES_REL="Network/Cookies"
+    KIRO_PROC_REGEX='[Kk]iro\.exe'
+    CHROME_PROC_REGEX='chrome\.exe'
+    ;;
+  *)
+    echo "✘ 不支持的操作系统: $(uname -s)" >&2
+    echo "  本脚本支持: Linux / macOS / WSL / Git Bash on Windows" >&2
+    echo "  原生 Windows PowerShell 用户请使用 clean-kiro-login.ps1" >&2
+    exit 1
+    ;;
+esac
+
 KAGENT_DIR="$KIRO_DIR/User/globalStorage/kiro.kiroagent"
 STORAGE_JSON="$KIRO_DIR/User/globalStorage/storage.json"
 STATE_DB="$KIRO_DIR/User/globalStorage/state.vscdb"
-AWS_SSO_CACHE="$HOME/.aws/sso/cache"
-CHROME_DIR="$HOME/.config/google-chrome"
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$HOME/kiro-cleanup-backup-$TS"
+
+# 跨平台进程查找：优先 pgrep -fl（Linux/macOS BSD 都支持），fallback ps + grep
+ps_match() {
+  local re="$1"
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -fl "$re" 2>/dev/null || true
+  else
+    ps -A -o pid=,command= 2>/dev/null | grep -E "$re" | grep -v grep || true
+  fi
+}
 
 echo "================================================="
 cyan  " Kiro 登录痕迹清理脚本"
 echo "================================================="
+echo "平台: $OS_KIND"
+echo "Kiro 目录: $KIRO_DIR"
 echo "模式: $([[ $DRY -eq 1 ]] && echo DRY-RUN || echo 实际执行)$([[ $YES -eq 1 ]] && echo ' / 自动确认')"
 echo "备份目录(若发生): $BACKUP_DIR"
 echo
@@ -76,15 +141,16 @@ echo
 # ----- 0. 前置检查 -----
 cyan "[0/6] 前置检查"
 
-if pgrep -af -i "kiro" | grep -viE "clean-kiro-login|kiroaccountmanager|kiro-cleanup" >/dev/null 2>&1; then
+kiro_procs="$(ps_match "$KIRO_PROC_REGEX" | grep -viE 'clean-kiro-login|kiroaccountmanager|kiro-cleanup|kiro_account|Kiro Account Manager' || true)"
+if [[ -n "$kiro_procs" ]]; then
   red "✘ 检测到 Kiro 进程正在运行，请先完全退出 Kiro:"
-  pgrep -af -i kiro | grep -viE "clean-kiro-login|kiro-cleanup" || true
+  printf '%s\n' "$kiro_procs"
   exit 1
 fi
 green "✔ Kiro 未运行"
 
 CHROME_RUNNING=0
-if pgrep -af "/opt/google/chrome/chrome|/usr/bin/google-chrome|chromium" >/dev/null 2>&1; then
+if [[ -n "$(ps_match "$CHROME_PROC_REGEX")" ]]; then
   CHROME_RUNNING=1
 fi
 if [[ $SKIP_BROWSER -eq 0 && $CHROME_RUNNING -eq 1 ]]; then
@@ -194,14 +260,22 @@ if [[ $ROTATE_IDS -eq 1 ]]; then
 fi
 
 # 4b. machineid 文件 — 总是和 devDeviceId 保持一致（Kiro 的约定）
+# Linux 用 'machineid'，macOS/Windows 用 'machineId'；为保险起见两个都处理
+MID_FILE_PATH="$KIRO_DIR/$MACHINEID_FILE"
 if [[ $ROTATE_IDS -eq 1 ]]; then
-  echo "  write $KIRO_DIR/machineid <- $NEW_DEV_DEVICE_ID"
+  echo "  write $MID_FILE_PATH <- $NEW_DEV_DEVICE_ID"
   if [[ $DRY -eq 0 ]]; then
     mkdir -p "$KIRO_DIR"
-    printf '%s' "$NEW_DEV_DEVICE_ID" > "$KIRO_DIR/machineid"
+    printf '%s' "$NEW_DEV_DEVICE_ID" > "$MID_FILE_PATH"
   fi
+  # 顺手清理另一种大小写的旧文件（防止跨平台拷贝过来的残留）
+  for alt in machineid machineId machineID; do
+    [[ "$alt" != "$MACHINEID_FILE" && -f "$KIRO_DIR/$alt" ]] && { echo "  rm  $KIRO_DIR/$alt  (旧大小写残留)"; run "rm -f '$KIRO_DIR/$alt'"; }
+  done
 else
-  [[ -f "$KIRO_DIR/machineid" ]] && { echo "  rm $KIRO_DIR/machineid"; run "rm -f '$KIRO_DIR/machineid'"; }
+  for alt in machineid machineId machineID; do
+    [[ -f "$KIRO_DIR/$alt" ]] && { echo "  rm $KIRO_DIR/$alt"; run "rm -f '$KIRO_DIR/$alt'"; }
+  done
 fi
 
 # 4c. storage.json: 写入或删除 telemetry.* 字段
@@ -278,7 +352,8 @@ telemetry.machineId        = $NEW_MACHINE_ID
 telemetry.macMachineId     = $NEW_MAC_MACHINE_ID
 telemetry.sqmId            = $NEW_SQM_ID
 storage.serviceMachineId   = $NEW_SERVICE_MACHINE_ID
-~/.config/Kiro/machineid   = $NEW_DEV_DEVICE_ID
+$MID_FILE_PATH
+  = $NEW_DEV_DEVICE_ID
 EOF
 fi
 
@@ -342,7 +417,7 @@ else
     [[ -d "$p" ]] && profiles+=("$p")
   done
   for p in "${profiles[@]}"; do
-    cdb="$p/Cookies"
+    cdb="$p/$CHROME_COOKIES_REL"
     [[ -f "$cdb" ]] || continue
     echo "  profile: $p"
     if [[ $DRY -eq 0 ]]; then
@@ -374,6 +449,8 @@ echo "================================================="
 green " 清理完成"
 echo "================================================="
 cat <<EOF
+平台: $OS_KIND
+
 保留:
   - 聊天历史:  $KAGENT_DIR/sessions/
   - 工作区聊天:$KAGENT_DIR/workspace-sessions/
@@ -382,12 +459,12 @@ cat <<EOF
   - state.vscdb 中 chat.ChatSessionStore.index 等聊天相关 key
 
 已清:
-  - Kiro accessToken / refreshToken (~/.aws/sso/cache/)
-  - AWS SSO clientId/clientSecret  (~/.aws/sso/cache/)
+  - Kiro accessToken / refreshToken ($AWS_SSO_CACHE/)
+  - AWS SSO clientId/clientSecret  ($AWS_SSO_CACHE/)
   - Kiro 内嵌 Chromium 全部 storage / cookies / cache
-  - Kiro 设备指纹: machineid + storage.json + state.vscdb 的 telemetry/serviceMachineId
+  - Kiro 设备指纹: $MACHINEID_FILE + storage.json + state.vscdb 的 telemetry/serviceMachineId
   - 历史账号 bucket: kiro.kiroagent/<hash>/, default/, profile.json, dev_data/
-  - Chrome 中 .kiro.dev / aws / awsapps / signin.aws 等 cookie
+  - Chrome 中 .kiro.dev / aws / awsapps / signin.aws 等 cookie ($CHROME_COOKIES_REL)
 
 备份: $BACKUP_DIR
 
